@@ -7,15 +7,15 @@ def create_axes_array(axes):
         array of shape {N,a,b,c,...} describing the coordinates at each point
         in the grid.
     """
-    import scipy
+    import numpy
     ndim = len(axes)
     shape = [ndim]
     for i in axes:
         shape.append(i.size)
 
-    coords = scipy.ones(shape)
+    coords = numpy.ones(shape)
     for i in range(ndim):
-        coords[i] = scipy.rollaxis(scipy.rollaxis(coords[i],i,ndim)*axes[i],ndim-1,i)
+        coords[i] = numpy.rollaxis(numpy.rollaxis(coords[i],i,ndim)*axes[i],ndim-1,i)
 
     return coords
 
@@ -29,16 +29,16 @@ class ndInterp:
     """
     def __init__(self,axes,z,order=3):
         from scipy import ndimage
-        import scipy
+        import numpy
         self.axes = {}
         for key in axes.keys():
             self.axes[key] = axes[key]
-        z = z.astype(scipy.float64)
+        z = z.astype(numpy.float64)
         self.z = z.copy()
         if order==1:
             self.spline = z.copy()
         else:
-            self.spline = ndimage.spline_filter(z,output=scipy.float64,order=order)
+            self.spline = ndimage.spline_filter(z,output=numpy.float64,order=order)
         self.order = order
 
 
@@ -72,10 +72,10 @@ class ndInterp:
 
     def set_order(self,order):
         from scipy import ndimage
-        import scipy
+        import numpy
         self.order = order
         if order==1:
             self.spline = self.z.copy()
             return
-        self.spline = ndimage.spline_filter(self.z,output=scipy.float64,
+        self.spline = ndimage.spline_filter(self.z,output=numpy.float64,
                                                 order=order)
