@@ -30,31 +30,70 @@ finite everywhere including x = R/r_s = 1, and match central differences.
 **Rung 2.** NUTS on `psi` reproduces the brute-force grid marginals exactly. 0 divergences.
 The JAX likelihood is the object `examples/get_wl_likelihood_grids.py` tabulates.
 
-**Rung 3.** N=100 lenses, 307 dimensions, 2.6 s, 0 divergences, r_hat = 1.00.
+**Rung 3.** All seven hyper-parameters recovered at N=1000 (3007 dims, 0 divergences, r_hat = 1.000,
+1000 warmup + 1000 draws x 8 chains):
+
+| | truth | inferred | z |
+|---|---|---|---|
+| `mh_mu` | 13.000 | 12.827 +/- 0.117 | -1.5 |
+| `mh_sig` | 0.300 | 0.289 +/- 0.123 | -0.1 |
+| `mh_beta` | 1.500 | 1.536 +/- 0.261 | +0.1 |
+| `ms_mu` | 11.300 | 11.293 +/- 0.009 | -0.8 |
+| `ms_sig` | 0.250 | 0.247 +/- 0.008 | -0.4 |
+| `c_mu` | 0.700 | 0.710 +/- 0.142 | +0.1 |
+| `c_sig` | 0.100 | 0.206 +/- 0.148 | +0.7 |
+
+At N=100, `mh_sig = 0.39 +/- 0.25` is essentially the Uniform(0,1) prior with a bump, as the stacked
+S/N predicts. It only becomes informative at N=1000. `c_sig` stays prior-dominated even there:
+concentration is the direction weak lensing constrains worst.
+
+`rung3_perlens_mixed_n1000.png` shows the per-lens logM200 posteriors, a free byproduct of joint
+sampling that the marginalised scheme discards. The slope is visibly shallower than unity: shrinkage
+towards the population mean.
 
 ## Parameterisation: mixed, not non-centred
-
-Measured at N=100, 300 warmup + 300 samples, 4 chains:
-
-| | median leapfrogs | saturating tree depth | divergences | min ESS | ESS/s |
-|---|---|---|---|---|---|
-| fully non-centred | 543 | 50% | 0 | 3 | 1.3 |
-| **mixed** | **63** | **0%** | **0** | **512** | **235** |
-| fully centred | 127 | 25% | 5 | 3 | 1.2 |
 
 Non-centring only pays when the data are *un*informative about the latent. `logM*` is pinned by
 `lmstar_obs` (0.15 dex, against 0.25 dex population scatter), so it wants the **centred** form.
 `logM200` and `logc200` are constrained only by weak lensing at per-lens S/N ~ 0.5, so they want
-**non-centred**. Getting this wrong costs 180x in ESS/s.
+**non-centred**.
 
-Note the failure mode: the fully non-centred model reports **zero divergences** while delivering an
-effective sample size of 3. It does not announce itself. Watch `num_steps` saturating at 2^10.
+At N=1000, 3007 dims, same seed and same sampler settings:
 
-## Cost
+| | time | divergences | saturating 2^10 | min ESS | worst r_hat |
+|---|---|---|---|---|---|
+| **mixed** | **493 s** | **0** | **0%** | **854** | **1.002** |
+| fully non-centred | 888 s | 97 | 42% | 2 | 6.8 |
+| fully centred | 1011 s | 0 | 25% | 2 | 11.9 |
 
-A gradient is 0.25 ms at N=100 (307 dims) and 0.97 ms at N=1000 (3007 dims), on CPU. At ~63
-leapfrogs/draw the whole N=1000 problem is minutes on a laptop. This is not a compute-bound problem;
-it was a geometry-bound one.
+The failure is silent. The fully centred run reports **zero divergences**; `ms_sig` has r_hat = 54.
+Both broken runs still place the truth inside their (meaningless, far too wide) error bars, so a
+z-score check against truth does **not** catch this. Watch `num_steps` saturating at 2^10 and r_hat.
+
+## Cost: do not use a GPU
+
+1000 warmup + 1000 draws, 8 chains, same code and same seed:
+
+| N | dims | 8x Xeon 4216 (CPU) | 1x A40 (GPU) |
+|---|---|---|---|
+| 100 | 307 | 5.2 s (788 ESS/s) | 155 s (23 ESS/s) |
+| 1000 | 3007 | **5.2 s (146 ESS/s)** | 493 s (1.7 ESS/s) |
+
+The GPU is ~95x slower at N=1000, and the posteriors agree to three decimals. We run in float64,
+which the A40 executes at 1/32 of its float32 rate, on arrays of ~50k elements -- far too small to
+amortise the per-leapfrog kernel launches. Chains must also be `vectorized` on one GPU rather than
+mapped across devices.
+
+Both CPU rows take 5.2 s because **compile time dominates**; the sampling itself is well under a
+second. This is not a compute-bound problem. It was a geometry-bound one (see above).
+
+Do not trust a naive `jax.grad` microbenchmark here: timing `jax.jit(jax.value_and_grad(pot))(z)` in
+a Python loop measures dispatch overhead (~0.25 ms/call), not the kernel. Inside NUTS's compiled
+`lax.scan` the real gradient is tens of microseconds. That benchmark over-estimated the cost of the
+N=1000 run by ~100x.
+
+The cluster is still the right home for the many-seed calibration runs (simulation-based
+calibration over ~50 realisations), but as a **CPU array job**, not a GPU job.
 
 ## Information content
 

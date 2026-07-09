@@ -80,7 +80,8 @@ for ax, k in zip(axes, names):
     ax.set_yticks([])
 fig.suptitle('%d lenses, %d dimensions, %d divergences (dashed = truth)' % (args.nlens, ndim, ndiv), fontsize=10)
 
-tag = '%s_n%d' % (args.param, args.nlens)
+# every run-defining option must appear here, or a --short probe silently overwrites a production plot
+tag = '%s_n%d_%s%s' % (args.param, args.nlens, args.device, '_short' if args.short else '')
 plt.savefig(os.path.join(os.path.dirname(__file__), 'rung3_eta_%s.png' % tag), dpi=110)
 
 # per-lens shrinkage: the marginalised scheme throws these away
