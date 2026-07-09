@@ -12,7 +12,7 @@ args = p.parse_args()
 
 # must precede any JAX backend initialisation
 import numpyro
-numpyro.set_platform(args.device)
+numpyro.set_platform({'gpu': 'cuda', 'cpu': 'cpu'}[args.device])
 if args.device == 'cpu':
     numpyro.set_host_device_count(args.chains)   # one CPU device per chain
 

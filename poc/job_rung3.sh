@@ -7,7 +7,7 @@
 #SBATCH --output=poc/out/rung3_%j.out
 #SBATCH --error=poc/out/rung3_%j.out
 
-set -euo pipefail
+set -uo pipefail   # not -e: one failing configuration must not discard the others
 cd "$SLURM_SUBMIT_DIR"
 mkdir -p poc/out
 
