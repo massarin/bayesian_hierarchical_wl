@@ -1,2 +1,6 @@
 *.pyc
 .venv
+__pycache__/
+poc/figs/
+poc/out/
+slurm-*.out

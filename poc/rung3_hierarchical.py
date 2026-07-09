@@ -5,12 +5,19 @@ p = argparse.ArgumentParser()
 p.add_argument('--nlens', type=int, default=100)
 p.add_argument('--nsrc', type=int, default=50)
 p.add_argument('--chains', type=int, default=8)
-p.add_argument('--centred', action='store_true', help='demonstrate the funnel')
+p.add_argument('--param', choices=['mixed', 'noncentred', 'centred'], default='mixed')
+p.add_argument('--device', choices=['cpu', 'gpu'], default='cpu')
+p.add_argument('--short', action='store_true', help='quick geometry probe, not a production run')
 args = p.parse_args()
 
 # must precede any JAX backend initialisation
 import numpyro
-numpyro.set_host_device_count(args.chains)
+numpyro.set_platform(args.device)
+if args.device == 'cpu':
+    numpyro.set_host_device_count(args.chains)   # one CPU device per chain
+
+# a single GPU holds one device: chains must be vectorised, not mapped across devices
+chain_method = 'vectorized' if args.device == 'gpu' else 'parallel'
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
@@ -26,22 +33,43 @@ import model
 print('jax devices: %d' % jax.local_device_count())
 d = mock.make(seed=42, nlens=args.nlens, nsrc=args.nsrc)
 
-kernel = NUTS(model.centred if args.centred else model.hierarchical, target_accept_prob=0.9)
-mcmc = MCMC(kernel, num_warmup=1000, num_samples=1000, num_chains=args.chains,
-            chain_method='parallel', progress_bar=False)
+models = {'mixed': model.mixed, 'noncentred': model.hierarchical, 'centred': model.centred}
+nwarm, ndraw = (300, 300) if args.short else (1000, 1000)
+kernel = NUTS(models[args.param], target_accept_prob=0.9)
+mcmc = MCMC(kernel, num_warmup=nwarm, num_samples=ndraw, num_chains=args.chains,
+            chain_method=chain_method, progress_bar=False)
 
 t0 = time.time()
-mcmc.run(jax.random.PRNGKey(0), d['R'], d['s_cr'], d['et'], d['lmstar_obs'], extra_fields=('diverging',))
+mcmc.run(jax.random.PRNGKey(0), d['R'], d['s_cr'], d['et'], d['lmstar_obs'],
+         extra_fields=('diverging', 'num_steps'))
 dt = time.time() - t0
 
 ndim = 7 + 3 * args.nlens
 ndiv = int(mcmc.get_extra_fields()['diverging'].sum())
-print('%s: %d lenses, %d dims, %.1f s, %d divergences' % (
-    'centred' if args.centred else 'non-centred', args.nlens, ndim, dt, ndiv))
-mcmc.print_summary(exclude_deterministic=True)
-
+nsteps = np.asarray(mcmc.get_extra_fields()['num_steps'])
 s = mcmc.get_samples()
 names = ['mh_mu', 'mh_sig', 'mh_beta', 'ms_mu', 'ms_sig', 'c_mu', 'c_sig']
+
+# hyper-parameters only: the 3N latents are nuisance
+from numpyro.diagnostics import effective_sample_size, gelman_rubin
+chained = mcmc.get_samples(group_by_chain=True)
+
+# saturating max tree depth means the step size is throttled by a badly scaled direction:
+# a geometry problem, invisible in the divergence count
+saturating = 100. * (nsteps >= 1023).mean()
+min_ess = min(float(effective_sample_size(np.asarray(chained[k]))) for k in names)
+print('%s: %d lenses, %d dims, %.1f s, %d divergences' % (args.param, args.nlens, ndim, dt, ndiv))
+print('  median %d leapfrogs/draw, %.0f%% saturating 2^10, min ESS %.0f (%.1f ESS/s)' % (
+    np.median(nsteps), saturating, min_ess, min_ess / dt))
+print('\n%-9s %8s %8s %9s %8s %7s %7s' % ('', 'truth', 'mean', 'std', 'z', 'n_eff', 'r_hat'))
+for k in names:
+    x = np.asarray(s[k])
+    z = (x.mean() - truth[k]) / x.std()
+    print('%-9s %8.3f %8.3f %9.3f %8.1f %7.0f %7.3f' % (
+        k, truth[k], x.mean(), x.std(), z,
+        effective_sample_size(np.asarray(chained[k])), gelman_rubin(np.asarray(chained[k]))))
+worst_z = max(abs((np.asarray(s[k]).mean() - truth[k]) / np.asarray(s[k]).std()) for k in names)
+print('\nworst |z| vs truth: %.2f' % worst_z)
 
 fig, axes = plt.subplots(1, 7, figsize=(17, 2.8), constrained_layout=True)
 for ax, k in zip(axes, names):
@@ -52,7 +80,7 @@ for ax, k in zip(axes, names):
     ax.set_yticks([])
 fig.suptitle('%d lenses, %d dimensions, %d divergences (dashed = truth)' % (args.nlens, ndim, ndiv), fontsize=10)
 
-tag = 'centred' if args.centred else 'noncentred'
+tag = '%s_n%d' % (args.param, args.nlens)
 plt.savefig(os.path.join(os.path.dirname(__file__), 'rung3_eta_%s.png' % tag), dpi=110)
 
 # per-lens shrinkage: the marginalised scheme throws these away
